@@ -7,8 +7,9 @@ const ID_IDX = 4;
 const HOST_SIZE = 4;
 const PORT_SIZE = 2;
 const PREFIX_SIZE = 5;
+const LEN_SIZE = 4;
+const SEG_SIZE = 16 * 1024; // 16KB
 
-pub const Peer = struct { ip: [HOST_SIZE]u8, port: [PORT_SIZE]u8 };
 pub const PeerConn = struct {
     choked: bool,
     interested: bool,
@@ -16,12 +17,6 @@ pub const PeerConn = struct {
     am_interested: bool,
     peer_choking: bool,
     peer_interested: bool,
-    // default
-    // am_c = 1
-    // am_i = 0
-    // p_c = 1
-    // p_i = 0
-    //
     // all data is u32 Big-Endian
 };
 
@@ -39,117 +34,128 @@ const MessageType = union(enum) {
     port,
 };
 
-// generates <length><id> portion of peer message, len necessary for things like bitfield and piece
-fn generateMessagePrefix(allocator: std.mem.Allocator, message_type: MessageType, len: u64) ![]u8 {
-    var message_prefix: []u8 = undefined;
-    switch (message_type) {
-        .keep_alive => {
-            var length = [_]u8{0} ** 4;
-            message_prefix = try allocator.alloc(u8, PREFIX_SIZE - 1); // no id byte
-            std.mem.writeInt(u32, &length, 1, .big);
-            std.mem.copyForwards(u8, message_prefix, length[0..]);
-        },
-        .choke => {
-            var length = [_]u8{0} ** 4;
-            const id: u8 = 0;
-            message_prefix = try allocator.alloc(u8, PREFIX_SIZE);
-            std.mem.writeInt(u32, &length, 1, .big);
-            std.mem.copyForwards(u8, message_prefix, length[0..]);
-            message_prefix[ID_IDX] = id;
-        },
-        .unchoke => {
-            var length = [_]u8{0} ** 4;
-            const id: u8 = 1;
-            message_prefix = try allocator.alloc(u8, PREFIX_SIZE);
-            std.mem.writeInt(u32, &length, 1, .big);
-            std.mem.copyForwards(u8, message_prefix, length[0..]);
-            message_prefix[ID_IDX] = id;
-        },
-        .interested => {
-            var length = [_]u8{0} ** 4;
-            const id: u8 = 2;
-            message_prefix = try allocator.alloc(u8, PREFIX_SIZE);
-            std.mem.writeInt(u32, &length, 1, .big);
-            std.mem.copyForwards(u8, message_prefix, length[0..]);
-            message_prefix[ID_IDX] = id;
-        },
-        .not_interested => {
-            var length = [_]u8{0} ** 4;
-            const id: u8 = 3;
-            message_prefix = try allocator.alloc(u8, PREFIX_SIZE);
-            std.mem.writeInt(u32, &length, 1, .big);
-            std.mem.copyForwards(u8, message_prefix, length[0..]);
-            message_prefix[ID_IDX] = id;
-        },
-        .have => {
-            var length = [_]u8{0} ** 4;
-            const id: u8 = 4;
-            message_prefix = try allocator.alloc(u8, PREFIX_SIZE);
-            std.mem.writeInt(u32, &length, 5, .big);
-            std.mem.copyForwards(u8, message_prefix, length[0..]);
-            message_prefix[ID_IDX] = id;
-        },
-        .bitfield => {
-            var length = [_]u8{0} ** 4;
-            const id: u8 = 5;
-            message_prefix = try allocator.alloc(u8, PREFIX_SIZE);
-            std.mem.writeInt(u32, &length, 1 + len, .big);
-            std.mem.copyForwards(u8, message_prefix, length[0..]);
-            message_prefix[ID_IDX] = id;
-        },
-        .request => {
-            var length = [_]u8{0} ** 4;
-            const id: u8 = 6;
-            message_prefix = try allocator.alloc(u8, PREFIX_SIZE);
-            std.mem.writeInt(u32, &length, 13, .big);
-            std.mem.copyForwards(u8, message_prefix, length[0..]);
-            message_prefix[ID_IDX] = id;
-        },
-        .piece => {
-            var length = [_]u8{0} ** 4;
-            const id: u8 = 7;
-            message_prefix = try allocator.alloc(u8, PREFIX_SIZE);
-            std.mem.writeInt(u32, &length, 9 + len, .big);
-            std.mem.copyForwards(u8, message_prefix, length[0..]);
-            message_prefix[ID_IDX] = id;
-        },
-        .cancel => {
-            var length = [_]u8{0} ** 4;
-            const id: u8 = 8;
-            message_prefix = try allocator.alloc(u8, PREFIX_SIZE);
-            std.mem.writeInt(u32, &length, 13, .big);
-            std.mem.copyForwards(u8, message_prefix, length[0..]);
-            message_prefix[ID_IDX] = id;
-        },
-        .port => {
-            var length = [_]u8{0} ** 4;
-            const id: u8 = 9;
-            message_prefix = try allocator.alloc(u8, PREFIX_SIZE);
-            std.mem.writeInt(u32, &length, 3, .big);
-            std.mem.copyForwards(u8, message_prefix, length[0..]);
-            message_prefix[ID_IDX] = id;
-        },
+pub const Peer = struct {
+    allocator: std.mem.Allocator,
+    ip: [HOST_SIZE]u8,
+    port: [PORT_SIZE]u8,
+    conn: PeerConn,
+
+    pub fn init(allocator: std.mem.Allocator, ip: [HOST_SIZE]u8, port: [PORT_SIZE]u8) !Peer {
+        return Peer{ .allocator = allocator, .ip = ip, .port = port, .conn = PeerConn{ .choked = true, .interested = false, .am_choking = true, .am_interested = false, .peer_choking = true, .peer_interested = false } };
     }
-    return message_prefix;
-}
 
-fn generateMessage(allocator: std.mem.Allocator, prefix: MessageType) {
-    return message;
-}
+    fn writeLenPrefix(self: *@This(), message_prefix: []u8, len: u32) ![]u8 {
+        var length = [_]u8{0} ** LEN_SIZE;
+        message_prefix = try self.allocator.alloc(u8, LEN_SIZE);
+        std.mem.writeInt(u32, &length, len, .big);
+        std.mem.copyForwards(u8, message_prefix, length[0..]);
+        return message_prefix;
+    }
 
-fn generateHandshake(allocator: std.mem.Allocator, peer_id: [HASH_LEN]u8, info_hash: [HASH_LEN]u8) ![]u8 {
-    var handshake: []u8 = try allocator.alloc(u8, 68); // magic number 49 + 19
-    handshake[0] = 19;
-    std.mem.copyForwards(u8, handshake[1..], "BitTorrent protocol"[0..19]);
-    std.mem.copyForwards(u8, handshake[28..], &info_hash);
-    std.mem.copyForwards(u8, handshake[48..], &peer_id);
-    return handshake;
-}
+    // generates <length><id> portion of peer message, len necessary for things like bitfield and piece
+    fn generateMessagePrefix(self: *@This(), message_type: MessageType, len: u32) ![]u8 {
+        var message_prefix: []u8 = undefined;
+        switch (message_type) {
+            .keep_alive => {
+                try writeLenPrefix(self.allocator, message_prefix, 0);
+            },
+            .choke => {
+                const id = 0;
+                try writeLenPrefix(self.allocator, message_prefix, 1);
+                self.allocator.realloc(message_prefix, message_prefix.len + 1);
+                message_prefix[ID_IDX] = id;
+            },
+            .unchoke => {
+                const id = 1;
+                try writeLenPrefix(self.allocator, message_prefix, 1);
+                self.allocator.realloc(message_prefix, message_prefix.len + 1);
+                message_prefix[ID_IDX] = id;
+            },
+            .interested => {
+                const id = 2;
+                try writeLenPrefix(self.allocator, message_prefix, 1);
+                self.allocator.realloc(message_prefix, message_prefix.len + 1);
+                message_prefix[ID_IDX] = id;
+            },
+            .not_interested => {
+                const id = 3;
+                try writeLenPrefix(self.allocator, message_prefix, 1);
+                self.allocator.realloc(message_prefix, message_prefix.len + 1);
+                message_prefix[ID_IDX] = id;
+            },
+            .have => {
+                const id = 4;
+                try writeLenPrefix(self.allocator, message_prefix, 5);
+                self.allocator.realloc(message_prefix, message_prefix.len + 1);
+                message_prefix[ID_IDX] = id;
+            },
+            .bitfield => {
+                const id: u8 = 5;
+                try writeLenPrefix(self.allocator, message_prefix, 1 + len);
+                self.allocator.realloc(message_prefix, message_prefix.len + 1);
+                message_prefix[ID_IDX] = id;
+            },
+            .request => {
+                const id: u8 = 6;
+                try writeLenPrefix(self.allocator, message_prefix, 13);
+                self.allocator.realloc(message_prefix, message_prefix.len + 1);
+                message_prefix[ID_IDX] = id;
+            },
+            .piece => {
+                const id: u8 = 7;
+                try writeLenPrefix(self.allocator, message_prefix, 9 + len);
+                self.allocator.realloc(message_prefix, message_prefix.len + 1);
+                message_prefix[ID_IDX] = id;
+            },
+            .cancel => {
+                const id: u8 = 8;
+                try writeLenPrefix(self.allocator, message_prefix, 13);
+                self.allocator.realloc(message_prefix, message_prefix.len + 1);
+                message_prefix[ID_IDX] = id;
+            },
+            .port => {
+                const id: u8 = 9;
+                try writeLenPrefix(self.allocator, message_prefix, 3);
+                self.allocator.realloc(message_prefix, message_prefix.len + 1);
+                message_prefix[ID_IDX] = id;
+            },
+        }
+        return message_prefix;
+    }
 
-pub fn peerConnection(allocator: std.mem.Allocator, peer_id: [HASH_LEN]u8, info_hash: [HASH_LEN]u8) !void {
-    const handshake = try generateHandshake(allocator, peer_id, info_hash);
-    print("handshake: {any}\n", .{handshake});
-    const m_prefix = try generateMessagePrefix(allocator, .keep_alive);
-    print("m_prefix: {any}\n", .{m_prefix});
-    return;
-}
+    fn generateMessage(self: *@This(), m_type: MessageType) ![]u8 {
+        _ = self.generateMessagePrefix(self.allocator, m_type);
+        const message: []u8 = undefined;
+        switch (m_type) {
+            .keep_alive => {},
+            .choke => {},
+            .unchoke => {},
+            .interested => {},
+            .not_interested => {},
+            .have => {},
+            .bitfield => {},
+            .request => {},
+            .piece => {},
+            .cancel => {},
+            .port => {},
+        }
+        return message;
+    }
+
+    fn generateHandshake(self: *@This(), peer_id: [HASH_LEN]u8, info_hash: [HASH_LEN]u8) ![]u8 {
+        var handshake: []u8 = try self.allocator.alloc(u8, 68); // magic number 49 + 19
+        handshake[0] = 19;
+        std.mem.copyForwards(u8, handshake[1..], "BitTorrent protocol"[0..19]);
+        std.mem.copyForwards(u8, handshake[28..], &info_hash);
+        std.mem.copyForwards(u8, handshake[48..], &peer_id);
+        return handshake;
+    }
+
+    fn connect(self: *@This(), peer_id: [HASH_LEN]u8, info_hash: [HASH_LEN]u8) !void {
+        const handshake = try generateHandshake(self.allocator, peer_id, info_hash);
+        print("handshake: {any}\n", .{handshake});
+        const m_prefix = try generateMessagePrefix(self.allocator, .keep_alive);
+        print("m_prefix: {any}\n", .{m_prefix});
+        return;
+    }
+};

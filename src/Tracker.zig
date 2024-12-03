@@ -6,7 +6,6 @@ const Address = net.Address;
 const print = std.debug.print;
 
 const Peer = @import("./Peer.zig").Peer;
-const peerConnection = @import("./Peer.zig").peerConnection;
 const Bencode = @import("./Bencode.zig");
 const utils = @import("./utils.zig");
 const consts = @import("./consts.zig");
@@ -62,9 +61,7 @@ pub fn contactTracker(allocator: *std.mem.Allocator, url: []u8, info_hash: [20]u
         if (peer_idx > 0) {
             const t_response = try buildResponseStruct(allocator, b_buf[0..rd_bytes]);
             print("{any}\n", .{t_response});
-            for (t_response.peers) |_| {
-                try peerConnection(allocator.*, peer_id, info_hash);
-            }
+            for (t_response.peers) |_| {}
         }
     } else |_| {
         // TODO: Log error
@@ -91,7 +88,7 @@ fn buildResponseStruct(allocator: *std.mem.Allocator, buf: []u8) !TrackerRespons
             const port = t_peers.String[(i * 6 + 4)..(i * 6 + 6)];
             const ip_sized = ip[0..4];
             const port_sized = port[0..2];
-            peers[i] = Peer{ .ip = ip_sized.*, .port = port_sized.* };
+            peers[i] = try Peer.init(allocator.*, ip_sized.*, port_sized.*);
         }
     }
     return TrackerResponse{ .interval = interval, .peers = peers };
