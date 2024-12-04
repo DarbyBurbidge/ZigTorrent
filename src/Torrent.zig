@@ -19,7 +19,7 @@ pub const TorrentFile = struct {
     pieces: [][HASH_LEN]u8,
 };
 
-pub fn parseTorrentFile(buf: []u8, allocator: *std.mem.Allocator) !TorrentFile {
+pub fn parseTorrentFile(buf: []u8, allocator: std.mem.Allocator) !TorrentFile {
     var announce: [][]u8 = undefined;
     var comment: []u8 = undefined;
     var creation_date: u64 = undefined;

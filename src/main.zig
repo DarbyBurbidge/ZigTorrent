@@ -3,16 +3,18 @@ const getopt = @import("./getopt.zig");
 const Peer = @import("./Peer.zig");
 const Bencode = @import("./Bencode.zig");
 const Torrent = @import("./Torrent.zig");
+const FileManager = @import("./File.zig").FileManager;
+const initiateFileManager = @import("./File.zig");
+const consts = @import("./consts.zig");
+const MAX_PATH = consts.MAX_PATH;
+const MAX_FILE_SIZE = consts.MAX_FILE_SIZE;
 
 const os = std.os;
-
-const MAX_PATH = 4096;
-const MAX_FILE_SIZE = 1048576;
 
 var filename: ?[]const u8 = undefined;
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    var allocator = gpa.allocator();
+    const allocator = gpa.allocator();
 
     var verbose = false;
     var opts = getopt.getopt("vf:");
@@ -72,39 +74,23 @@ pub fn main() !void {
 
     var torrents = try std.fs.cwd().openDir("./torrents", .{ .iterate = true });
     var t_iter = torrents.iterate();
-    while (try t_iter.next()) |contents| : (i += 1) {
-        std.debug.print("dir contents: {s}, count: {d}\n", .{ contents.name, i });
-        if (std.mem.indexOf(u8, contents.name, ".torrent")) |_| {
-            var file_buf = [_]u8{0} ** (MAX_FILE_SIZE);
-            var t_file = try torrents.openFile(contents.name, .{ .mode = .read_only });
-            const read_bytes = try t_file.read(&file_buf);
-            const buf: []u8 = file_buf[0..read_bytes];
-            const torrent_file = try Torrent.parseTorrentFile(buf, &allocator);
-
-            const contactTracker = @import("./Tracker.zig").contactTracker;
-            std.debug.print("{s}", .{torrent_file.info_hash});
-            for (torrent_file.announce) |u_announce| {
-                if (usesHttp(u_announce)) {
-                    _ = try std.Thread.spawn(.{ .allocator = allocator }, contactTracker, .{ &allocator, u_announce, torrent_file.info_hash, torrent_file.length });
-                    //try contactTracker(&allocator, u_announce, torrent_file.info_hash, torrent_file.length);
-                }
-                std.time.sleep(std.time.ns_per_s / 4);
-            }
+    var t_threads: []std.Thread = try allocator.alloc(std.Thread, t_iter.end_index + 1);
+    i = 0;
+    while (try t_iter.next()) |t_file| : (i += 1) {
+        std.debug.print("dir contents: {s}, count: {d}\n", .{ t_file.name, i });
+        if (std.mem.indexOf(u8, t_file.name, ".torrent")) |_| {
+            t_threads[i] = try std.Thread.spawn(.{ .allocator = allocator }, asyncCallFM, .{ allocator, torrents, t_file });
         }
     }
+    for (t_threads) |t_thread| {
+        std.Thread.join(t_thread);
+    }
+    while (true) {}
 }
 
-pub fn usesHttp(url: []u8) bool {
-    const http = "http";
-    if (url.len < http.len) {
-        return false;
-    }
-    for (0..http.len) |i| {
-        if (http[i] != url[i]) {
-            return false;
-        }
-    }
-    return true;
+fn asyncCallFM(allocator: std.mem.Allocator, torrents: std.fs.Dir, t_file: std.fs.Dir.Entry) void {
+    var f_mgr = FileManager.init(allocator, torrents, t_file) catch return;
+    f_mgr.beginTorrent() catch return;
 }
 
 pub fn arrncpy(dest: []u8, src: []u8, dest_start: usize, src_start: usize, src_end: usize) !usize {

@@ -109,16 +109,16 @@ pub const ValueTree = struct {
         self.arena.deinit();
     }
 
-    pub fn parse(input: *[]const u8, allocator: *std.mem.Allocator) !ValueTree {
-        var arena = std.heap.ArenaAllocator.init(allocator.*);
-        var a_allocator = arena.allocator();
+    pub fn parse(input: *[]const u8, allocator: std.mem.Allocator) !ValueTree {
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        const a_allocator = arena.allocator();
         errdefer arena.deinit();
-        const value = try parseInternal(input, &a_allocator, 0);
+        const value = try parseInternal(input, a_allocator, 0);
 
         return ValueTree{ .arena = arena, .root = value };
     }
 
-    fn parseInternal(input: *[]const u8, allocator: *std.mem.Allocator, rec_count: usize) anyerror!Value {
+    fn parseInternal(input: *[]const u8, allocator: std.mem.Allocator, rec_count: usize) anyerror!Value {
         if (rec_count == 100) return error.RecursionLimitReached;
 
         if (peek(input.*)) |c| {
@@ -126,7 +126,7 @@ pub const ValueTree = struct {
                 'i' => Value{ .Integer = try parseNumber(isize, input) },
                 '0'...'9' => Value{ .String = try parseBytes([]const u8, u8, allocator, input) },
                 'l' => {
-                    var arr = Array.init(allocator.*);
+                    var arr = Array.init(allocator);
                     errdefer arr.deinit();
 
                     try expectChar(input, 'l');
@@ -137,7 +137,7 @@ pub const ValueTree = struct {
                     return Value{ .Array = arr };
                 },
                 'd' => {
-                    var map = Map.init(allocator.*);
+                    var map = Map.init(allocator);
 
                     try expectChar(input, 'd');
                     while (!match(input, 'e')) {
@@ -270,7 +270,7 @@ fn match(s: *[]const u8, needle: u8) bool {
     return false;
 }
 
-fn parseArray(comptime T: type, childType: type, allocator: *std.mem.Allocator, s: *[]const u8, rec_count: usize) anyerror!T {
+fn parseArray(comptime T: type, childType: type, allocator: std.mem.Allocator, s: *[]const u8, rec_count: usize) anyerror!T {
     try expectChar(s, 'l');
 
     var arraylist = std.ArrayList(childType).init(allocator);
@@ -286,7 +286,7 @@ fn parseArray(comptime T: type, childType: type, allocator: *std.mem.Allocator, 
     return arraylist.toOwnedSlice();
 }
 
-fn parseBytes(comptime T: type, childType: type, allocator: *std.mem.Allocator, s: *[]const u8) anyerror!T {
+fn parseBytes(comptime T: type, childType: type, allocator: std.mem.Allocator, s: *[]const u8) anyerror!T {
     const optional_end_index = findFirstIndexOf(s.*[0..], ':');
     if (optional_end_index) |end_index| {
         if (s.*[0..end_index].len == 0) return error.MissingLengthBytes;
@@ -298,7 +298,7 @@ fn parseBytes(comptime T: type, childType: type, allocator: *std.mem.Allocator, 
         if (s.*.len < n) return error.InvalidByteLength;
 
         const bytes: []const u8 = s.*[0..n];
-        var arraylist = std.ArrayList(childType).init(allocator.*);
+        var arraylist = std.ArrayList(childType).init(allocator);
         errdefer {
             arraylist.deinit();
         }

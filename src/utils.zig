@@ -46,3 +46,18 @@ pub fn arr_len(slice: []u8) u64 {
     }
     return len;
 }
+
+// util for checking if string [read: url] contains 'http'
+// specific version of sub_str
+pub fn containsHttp(url: []u8) bool {
+    const http = "http";
+    if (url.len < http.len) {
+        return false;
+    }
+    for (0..http.len) |i| {
+        if (http[i] != url[i]) {
+            return false;
+        }
+    }
+    return true;
+}
