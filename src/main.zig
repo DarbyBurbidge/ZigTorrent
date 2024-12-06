@@ -74,15 +74,17 @@ pub fn main() !void {
 
     var torrents = try std.fs.cwd().openDir("./torrents", .{ .iterate = true });
     var t_iter = torrents.iterate();
-    var t_threads: []std.Thread = try allocator.alloc(std.Thread, t_iter.end_index + 1);
+    std.debug.print("end idx: {}\n", .{i});
+    var t_threads = std.ArrayList(std.Thread).init(allocator);
     i = 0;
     while (try t_iter.next()) |t_file| : (i += 1) {
         std.debug.print("dir contents: {s}, count: {d}\n", .{ t_file.name, i });
         if (std.mem.indexOf(u8, t_file.name, ".torrent")) |_| {
-            t_threads[i] = try std.Thread.spawn(.{ .allocator = allocator }, asyncCallFM, .{ allocator, torrents, t_file });
+            const new_thread = try std.Thread.spawn(.{ .allocator = allocator }, asyncCallFM, .{ allocator, torrents, t_file });
+            try t_threads.append(new_thread);
         }
     }
-    for (t_threads) |t_thread| {
+    for (t_threads.items) |t_thread| {
         std.Thread.join(t_thread);
     }
     while (true) {}

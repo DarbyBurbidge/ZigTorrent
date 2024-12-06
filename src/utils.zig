@@ -1,3 +1,5 @@
+const std = @import("std");
+
 pub fn isValidUriChar(c: u8) bool {
     // smaller than 0, and not . or -
     if (((c != 45) or (c != 46)) and c < 48) {
@@ -49,7 +51,7 @@ pub fn arr_len(slice: []u8) u64 {
 
 // util for checking if string [read: url] contains 'http'
 // specific version of sub_str
-pub fn containsHttp(url: []u8) bool {
+pub fn containsHttp(url: []const u8) bool {
     const http = "http";
     if (url.len < http.len) {
         return false;

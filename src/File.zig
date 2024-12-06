@@ -6,6 +6,7 @@ const Torrent = @import("./Torrent.zig");
 const Tracker = @import("./Tracker.zig");
 const TrackerResponse = Tracker.TrackerResponse;
 const Peer = @import("./Peer.zig").Peer;
+const manageConn = @import("./Peer.zig").manageConn;
 const contactTracker = @import("./Tracker.zig").contactTracker;
 const consts = @import("./consts.zig");
 const containsHttp = @import("./utils.zig").containsHttp;
@@ -15,14 +16,26 @@ const HASH_LEN = consts.HASH_LEN;
 const FILE_DIR = consts.FILE_DIR;
 const TOR_DIR = consts.TOR_DIR;
 
+pub const FileBuffer = struct {
+    mtx: std.Thread.Mutex,
+    buf: []u8,
+};
+
+pub const FileBitField = struct {
+    mtx: std.Thread.Mutex,
+    b_field: []u1,
+};
+
 pub const FileManager = struct {
     allocator: std.mem.Allocator,
     peer_id: [HASH_LEN]u8,
     t_file: Torrent.TorrentFile,
     f_file: std.fs.File.Stat,
+    f_buf: FileBuffer,
+    f_bfield: FileBitField,
     t_mtx: std.Thread.Mutex,
-    f_mtx: std.Thread.Mutex,
     peers: std.ArrayList(Peer),
+    p_threads: std.ArrayList(std.Thread),
 
     pub fn init(allocator: std.mem.Allocator, t_dir: std.fs.Dir, t_file: std.fs.Dir.Entry) !FileManager {
         var t_buf = [_]u8{0} ** (MAX_FILE_SIZE);
@@ -32,14 +45,23 @@ pub const FileManager = struct {
         const t_obj = try Torrent.parseTorrentFile(t_buf[0..bytes_r], allocator);
         const f_stat = try setDestFile(t_obj.name);
         const peer_id = try setPeerId();
+        print("in File init, length: {}\n", .{t_obj.length});
         return FileManager{
             .allocator = allocator,
             .peer_id = peer_id,
             .t_file = t_obj,
             .f_file = f_stat,
+            .f_buf = FileBuffer{
+                .mtx = std.Thread.Mutex{},
+                .buf = try allocator.alloc(u8, t_obj.length),
+            },
+            .f_bfield = FileBitField{
+                .mtx = std.Thread.Mutex{},
+                .b_field = try allocator.alloc(u1, t_obj.length / t_obj.piece_length),
+            },
             .t_mtx = std.Thread.Mutex{},
-            .f_mtx = std.Thread.Mutex{},
             .peers = std.ArrayList(Peer).init(allocator),
+            .p_threads = std.ArrayList(std.Thread).init(allocator),
         };
     }
 
@@ -83,10 +105,10 @@ pub const FileManager = struct {
         var t_threads = std.ArrayList(TrackerThread).init(self.allocator);
         defer t_threads.deinit();
         var r_mtx = std.Thread.Mutex{};
-        var responses: []TrackerResponse = try self.allocator.alloc(TrackerResponse, self.t_file.announce.len);
+        var responses: []TrackerResponse = try self.allocator.alloc(TrackerResponse, self.t_file.announce.items.len);
         defer self.allocator.free(responses);
 
-        for (self.t_file.announce, 0..) |u_announce, i| {
+        for (self.t_file.announce.items, 0..) |u_announce, i| {
             responses[i] = TrackerResponse{
                 .interval = 0,
                 .peers = undefined,
@@ -118,25 +140,36 @@ pub const FileManager = struct {
             tracker_t.thread.join();
             if (tracker_t.response.peers) |peers| {
                 print("Tracker Responded\n", .{});
+                // for each new peer, scan existing peers and only include if unique
                 for (peers) |peer| {
-                    try self.peers.append(peer);
+                    var exists = true;
+                    for (self.peers.items) |s_peer| {
+                        for (0..peer.ip.len) |i| {
+                            if (peer.ip[i] != s_peer.ip[i]) {
+                                exists = false;
+                            }
+                        }
+                    }
+                    if (!exists or self.peers.items.len == 0) {
+                        try self.peers.append(peer);
+                    }
                 }
             }
         }
         print("Gathered {} Peers\n", .{self.peers.items.len});
-        _ = try self.download();
+        _ = try self.contactPeers();
     }
 
-    fn download(self: *@This()) ![]u8 {
-        const dl_buf = self.allocator.alloc(u8, self.t_file.length / 8);
-        for (self.peers.items) |u_peer| {
-            var peer = u_peer;
-            print("Starting Download for: {s}\n", .{self.t_file.name});
-            peer.connect(self.peer_id, self.t_file.info_hash) catch |err| {
-                print("{}\n", .{err});
-            };
-            print("Completed Handshake: {s}\n", .{u_peer.ip});
+    // Spawn Peer Threads and start Peer Management
+    fn contactPeers(self: *@This()) !void {
+        var threads = std.ArrayList(std.Thread).init(self.allocator);
+        for (0..self.peers.items.len) |i| {
+            print("Initiating Peer Connection Manager: {x}, {}\n", .{ self.peers.items[i].ip, i });
+            const new_manager = try std.Thread.spawn(.{}, manageConn, .{ &self.peers.items[i], self.peer_id, self.t_file.info_hash, &self.f_buf, &self.f_bfield });
+            try threads.append(new_manager);
         }
-        return dl_buf;
+        for (threads.items) |thread| {
+            thread.join();
+        }
     }
 };

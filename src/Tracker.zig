@@ -22,7 +22,7 @@ const TrackerQuery = struct { info_hash: []u8, peer_id: []u8, port: u64, uploade
 
 pub const TrackerResponse = struct { interval: u64, peers: ?[]Peer };
 
-pub fn contactTracker(allocator: std.mem.Allocator, url: []u8, peer_id: []u8, info_hash: [20]u8, length: u64, response: *TrackerResponse, resp_mtx: *std.Thread.Mutex) void {
+pub fn contactTracker(allocator: std.mem.Allocator, url: []const u8, peer_id: []u8, info_hash: [20]u8, length: u64, response: *TrackerResponse, resp_mtx: *std.Thread.Mutex) void {
     var encoded_hash = [_]u8{0} ** 100;
     var hash_stream = std.io.fixedBufferStream(&encoded_hash);
     std.Uri.Component.percentEncode(hash_stream.writer(), &info_hash, isValid) catch |err| {
@@ -83,7 +83,6 @@ fn buildResponseStruct(allocator: std.mem.Allocator, buf: []u8) !TrackerResponse
         interval = @intCast(t_interval.Integer);
     }
     if (Bencode.mapLookup(tree.root.Map, "peers")) |t_peers| {
-        print("peers: {s}\n", .{t_peers.String[0..]});
         print("peer length: {}\n", .{t_peers.String.len});
         const num_peers = t_peers.String.len / 6;
         peers = try allocator.alloc(Peer, num_peers);
@@ -102,7 +101,7 @@ fn freeResponse(allocator: std.mem.Allocator, t_response: TrackerResponse) void 
     allocator.free(t_response.peers);
 }
 
-pub fn createRequestSlice(allocator: std.mem.Allocator, host: []u8, params: TrackerQuery) ![]u8 {
+pub fn createRequestSlice(allocator: std.mem.Allocator, host: []const u8, params: TrackerQuery) ![]u8 {
     const query = try std.fmt.allocPrint(allocator, "?info_hash={s}&peer_id={s}&port={}&uploaded={}&downloaded={}&compact={}&left={}", .{ params.info_hash, params.peer_id, params.port, params.uploaded, params.downloaded, params.compact, params.left });
     defer allocator.free(query);
     const request = try std.fmt.allocPrint(allocator, "{s}{s}", .{ host, query });

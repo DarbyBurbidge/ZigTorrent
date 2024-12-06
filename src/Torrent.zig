@@ -5,11 +5,12 @@ const Bencode = @import("./Bencode.zig");
 const utils = @import("./utils.zig");
 const consts = @import("./consts.zig");
 const includes = utils.includes_substr;
+const array_len = utils.arr_len;
 const MAX_FILE_SIZE = consts.MAX_FILE_SIZE;
 const HASH_LEN = consts.HASH_LEN;
 
 pub const TorrentFile = struct {
-    announce: [][]u8,
+    announce: std.ArrayList([]const u8),
     comment: []u8,
     creation_date: u64,
     info_hash: [HASH_LEN]u8,
@@ -20,7 +21,7 @@ pub const TorrentFile = struct {
 };
 
 pub fn parseTorrentFile(buf: []u8, allocator: std.mem.Allocator) !TorrentFile {
-    var announce: [][]u8 = undefined;
+    var announce = std.ArrayList([]const u8).init(allocator);
     var comment: []u8 = undefined;
     var creation_date: u64 = undefined;
     var info_hash = [_]u8{0} ** HASH_LEN;
@@ -32,20 +33,14 @@ pub fn parseTorrentFile(buf: []u8, allocator: std.mem.Allocator) !TorrentFile {
 
     const tree = try Bencode.ValueTree.parse(&p_buf, allocator);
     if (Bencode.mapLookup(tree.root.Map, "announce")) |t_announce| {
+        try announce.append(t_announce.String[0..]);
         if (Bencode.mapLookup(tree.root.Map, "announce-list")) |t_announce_list| {
-            var i: u32 = 0;
-            announce = try allocator.alloc([]u8, t_announce_list.Array.items.len + 1);
-            i += 1;
             for (t_announce_list.Array.items) |item| {
                 for (item.Array.items) |entry| {
-                    announce[i] = try allocator.dupe(u8, entry.String[0..]);
-                    i += 1;
+                    try announce.append(entry.String[0..]);
                 }
             }
-        } else {
-            announce = try allocator.alloc([]u8, 1);
         }
-        announce[0] = try allocator.dupe(u8, t_announce.String[0..]);
     }
     if (Bencode.mapLookup(tree.root.Map, "comment")) |t_comment| {
         std.debug.print("comment: {s}\n", .{t_comment.String});
@@ -60,8 +55,11 @@ pub fn parseTorrentFile(buf: []u8, allocator: std.mem.Allocator) !TorrentFile {
         var s_substr = "4:info".*;
         var e_substr = "8:url-list".*;
         const s_idx = includes(buf, &s_substr) + s_substr.len;
-        const e_idx = includes(buf, &e_substr);
+        var e_idx = includes(buf, &e_substr);
         //std.debug.print("info indices: {}, {}\n", .{ s_idx, buf[@intCast(e_idx)] });
+        if (e_idx < 0) {
+            e_idx = @as(i64, @intCast(buf.len)) - 1;
+        }
         if (s_idx > 0 and e_idx > 0) {
             const write_len = try stream.write(buf[@intCast(s_idx)..@intCast(e_idx)]);
             std.crypto.hash.Sha1.hash(t_info_str[0..write_len], &info_hash, .{});

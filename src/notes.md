@@ -69,6 +69,10 @@ and a laundry list of Zig resources.
 * PSU Appears to block Bittorrent requests
 * Trackers returning but no PeerList
 * Accidental null bytes in Uri Encoding
+* Original Test file is larger than RAM capacity, I could write a system to utilize swap, or find a different test file (went with a torrent for debian ~660MB)
+* issue with multithreading where I accidentally passed in a reference to a temp variable. I was using it to spawn threads and things looked fine, but all of the responses said they were coming from the same ip address (overwrote the peer struct and it's ip address)
+
+
 
 #### Test files
 Hashed Info for PoE1 File: 6d621051d4e4e3e73d07223ec28f39a00b34fcb9
