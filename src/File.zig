@@ -4,9 +4,10 @@ const RGen = std.Random.DefaultPrng;
 
 const Torrent = @import("./Torrent.zig");
 const Tracker = @import("./Tracker.zig");
+const BitField = @import("./BitField.zig").BitField;
 const TrackerResponse = Tracker.TrackerResponse;
 const Peer = @import("./Peer.zig").Peer;
-const manageConn = @import("./Peer.zig").manageConn;
+const initConn = @import("./Peer.zig").initConn;
 const contactTracker = @import("./Tracker.zig").contactTracker;
 const consts = @import("./consts.zig");
 const containsHttp = @import("./utils.zig").containsHttp;
@@ -23,7 +24,7 @@ pub const FileBuffer = struct {
 
 pub const FileBitField = struct {
     mtx: std.Thread.Mutex,
-    b_field: []u1,
+    b_field: BitField,
 };
 
 pub const FileManager = struct {
@@ -57,7 +58,9 @@ pub const FileManager = struct {
             },
             .f_bfield = FileBitField{
                 .mtx = std.Thread.Mutex{},
-                .b_field = try allocator.alloc(u1, t_obj.length / t_obj.piece_length),
+                .b_field = BitField{
+                    .field = try allocator.alloc(u8, t_obj.length),
+                },
             },
             .t_mtx = std.Thread.Mutex{},
             .peers = std.ArrayList(Peer).init(allocator),
@@ -165,11 +168,32 @@ pub const FileManager = struct {
         var threads = std.ArrayList(std.Thread).init(self.allocator);
         for (0..self.peers.items.len) |i| {
             print("Initiating Peer Connection Manager: {x}, {}\n", .{ self.peers.items[i].ip, i });
-            const new_manager = try std.Thread.spawn(.{}, manageConn, .{ &self.peers.items[i], self.peer_id, self.t_file.info_hash, &self.f_buf, &self.f_bfield });
+            const new_manager = try std.Thread.spawn(.{}, initConn, .{ &self.peers.items[i], self.peer_id, self.t_file.info_hash });
             try threads.append(new_manager);
         }
         for (threads.items) |thread| {
             thread.join();
         }
+
+        try self.startDownload();
     }
+
+    fn startDownload(self: *@This()) !void {
+        //var unchoked_peers = std.ArrayList(Peer).init();
+        var queue = std.ArrayList(PieceWork).init(self.allocator);
+        for (self.t_file.pieces, 0..) |piece, i| {
+            try queue.append(PieceWork{ .index = i, .hash = piece, .length = self.t_file.piece_length });
+        }
+        for (self.peers.items, 0..) |peer, i| {
+            if (peer.conn_stream) |_| {
+                print("kept alive {}\n", .{i});
+            }
+        }
+    }
+};
+
+const PieceWork = struct {
+    index: u64,
+    hash: [HASH_LEN]u8,
+    length: u64,
 };

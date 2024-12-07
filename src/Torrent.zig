@@ -83,9 +83,7 @@ pub fn parseTorrentFile(buf: []u8, allocator: std.mem.Allocator) !TorrentFile {
                 for (0..HASH_LEN) |byte_idx| {
                     pieces[hash_idx][byte_idx] = info_pieces.String[hash_idx * HASH_LEN + byte_idx];
                 }
-                //pieces[hash_idx] = try allocator.dupe(u8, info_pieces.String[hash_idx * HASH_LEN .. hash_idx * HASH_LEN + HASH_LEN]);
             }
-            //std.debug.print("{s}\n", .{info_pieces.String});
         }
     }
     return TorrentFile{

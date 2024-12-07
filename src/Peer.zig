@@ -2,6 +2,7 @@ const std = @import("std");
 const print = std.debug.print;
 const readInt = std.mem.readInt;
 
+const BitField = @import("./BitField.zig").BitField;
 const consts = @import("./consts.zig");
 const HASH_LEN = consts.HASH_LEN;
 const MAX_BUF_SIZE = consts.MAX_BUF_SIZE;
@@ -18,13 +19,14 @@ pub const PeerState = struct {
     am_interested: bool,
     peer_choking: bool,
     peer_interested: bool,
+    b_field: ?BitField,
     // all data is u32 Big-Endian
 };
 
 pub const PeerMessage = struct {
     type: MessageType,
     piece_idx: ?u32,
-    bitfield: ?[]u8, // need bit handling
+    b_field: ?BitField,
     index: ?u32,
     begin: ?u32,
     length: ?u32,
@@ -65,6 +67,7 @@ pub const Peer = struct {
                 .am_interested = false,
                 .peer_choking = true,
                 .peer_interested = false,
+                .b_field = undefined,
             },
         };
     }
@@ -160,100 +163,118 @@ pub const Peer = struct {
         const handshake = try self.genHandshake(self_id, info_hash);
         var buf = [_]u8{0} ** MAX_BUF_SIZE;
         const address = std.net.Address.initIp4(self.ip, self.port);
-        print("connect ip: {}.{}.{}.{}\n", .{ self.ip[0], self.ip[1], self.ip[2], self.ip[3] });
-
-        self.conn_stream = std.net.tcpConnectToAddress(address) catch undefined;
-        print("Peer Connection Established: {}.{}.{}.{}\n", .{ self.ip[0], self.ip[1], self.ip[2], self.ip[3] });
+        //print("connect ip: {}.{}.{}.{}\n", .{ self.ip[0], self.ip[1], self.ip[2], self.ip[3] });
+        self.conn_stream = try std.net.tcpConnectToAddress(address);
         if (self.conn_stream) |conn| {
+            print("Peer Connection Established: {}.{}.{}.{}\n", .{ self.ip[0], self.ip[1], self.ip[2], self.ip[3] });
             const num_w = conn.write(handshake) catch 0;
             if (num_w < handshake.len) {
+                self.conn_stream.?.close();
                 self.conn_stream = undefined;
-                print("Error: WriteHandshakeFailed\n", .{});
+                return error.WriteHandshakeFailed;
             }
             const num_r = conn.read(&buf) catch 0;
             if (num_r > 0) {
                 // validating handshake
                 print("Peer Handshake Recieved\n", .{});
             } else {
+                self.conn_stream.?.close();
                 self.conn_stream = undefined;
-                print("Error: ReadHandshakeFailed\n", .{});
+                return error.ReadHandshakeFailed;
             }
         }
     }
 
-    fn sendUnchoke(self: *@This()) !PeerMessage {
+    pub fn sendKeepAlive(self: *@This()) !PeerMessage {
+        var buf = [_]u8{0} ** MAX_BUF_SIZE;
+        if (self.conn_stream) |conn| {
+            const prefix = try self.genMsgPfx(.keep_alive, 0);
+            const bytes_w = conn.write(prefix) catch 0;
+            if (bytes_w > 0) {
+                //print("Sent Keep Alive\n", .{});
+            }
+            const bytes_r = conn.read(&buf) catch 0;
+            if (bytes_r > 0) {
+                return messageParse(buf[0..bytes_r]);
+            }
+            //print("No response\n", .{});
+        }
+        return error.NoConnection;
+    }
+
+    pub fn sendUnchoke(self: *@This()) !PeerMessage {
         var buf = [_]u8{0} ** MAX_BUF_SIZE;
         if (self.conn_stream) |conn| {
             self.state.am_choking = false;
             const prefix = try self.genMsgPfx(.unchoke, 0);
             const bytes_w = conn.write(prefix) catch 0;
             if (bytes_w > 0) {
-                print("Sent Unchoke\n", .{});
+                //print("Sent Unchoke\n", .{});
             }
             const bytes_r = conn.read(&buf) catch 0;
             if (bytes_r > 0) {
                 return messageParse(buf[0..bytes_r]);
             }
-            print("No response\n", .{});
+            //print("No response\n", .{});
         }
         return error.NoConnection;
     }
 
-    fn sendChoke(self: *@This()) !PeerMessage {
+    pub fn sendChoke(self: *@This()) !PeerMessage {
         var buf = [_]u8{0} ** MAX_BUF_SIZE;
         if (self.conn_stream) |conn| {
             self.state.am_choking = true;
             const prefix = try self.genMsgPfx(.choke, 0);
             const bytes_w = conn.write(prefix) catch 0;
             if (bytes_w > 0) {
-                print("Sent Choke\n", .{});
+                //print("Sent Choke\n", .{});
             }
             const bytes_r = conn.read(&buf) catch 0;
             if (bytes_r > 0) {
                 return messageParse(buf[0..bytes_r]);
             }
-            print("No response\n", .{});
+            //print("No response\n", .{});
         }
         return error.NoConnection;
     }
 
-    fn sendInterested(self: *@This()) !PeerMessage {
+    pub fn sendInterested(self: *@This()) !PeerMessage {
         var buf = [_]u8{0} ** MAX_BUF_SIZE;
         if (self.conn_stream) |conn| {
             self.state.am_interested = true;
             const prefix = try self.genMsgPfx(.interested, 0);
             const bytes_w = conn.write(prefix) catch 0;
             if (bytes_w > 0) {
-                print("Sent Interested\n", .{});
+                //print("Sent Interested\n", .{});
             }
             const bytes_r = conn.read(&buf) catch 0;
             if (bytes_r > 0) {
                 return messageParse(buf[0..bytes_r]);
             }
-            print("No response\n", .{});
+            //print("No response\n", .{});
         }
         return error.NoConnection;
     }
 
-    fn sendNotInterested(self: *@This()) !PeerMessage {
+    pub fn sendNotInterested(self: *@This()) !PeerMessage {
         var buf = [_]u8{0} ** MAX_BUF_SIZE;
         if (self.conn_stream) |conn| {
             self.state.am_interested = false;
             const prefix = try self.genMsgPfx(.not_interested, 0);
             const bytes_w = conn.write(prefix) catch 0;
             if (bytes_w > 0) {
-                print("Sent Not Interested\n", .{});
+                //print("Sent Not Interested\n", .{});
             }
             const bytes_r = conn.read(&buf) catch 0;
             if (bytes_r > 0) {
                 return messageParse(buf[0..bytes_r]);
             }
-            print("No response\n", .{});
+            //print("No response\n", .{});
         }
         return error.NoConnection;
     }
 
-    fn sendHave(self: *@This(), p_idx: u32) !PeerMessage {
+    pub fn sendHave(self: *@This(), p_idx: u32) !PeerMessage {
         var buf = [_]u8{0} ** MAX_BUF_SIZE;
         if (self.conn_stream) |conn| {
             const prefix = try self.genMsgPfx(.have, 0);
@@ -262,38 +283,38 @@ pub const Peer = struct {
             std.mem.copyForwards(u8, msg[5..], @bitCast(p_idx));
             const bytes_w = conn.write(msg) catch 0;
             if (bytes_w > 0) {
-                print("Sent Have\n", .{});
+                //print("Sent Have\n", .{});
             }
             const bytes_r = conn.read(&buf) catch 0;
             if (bytes_r > 0) {
                 return messageParse(buf[0..bytes_r]);
             }
-            print("No Response\n", .{});
+            //print("No Response\n", .{});
         }
         return error.NoConnection;
     }
 
-    fn sendBitField(self: *@This(), b_field: []u8) !PeerMessage {
+    pub fn sendBitField(self: *@This(), b_field: BitField) !PeerMessage {
         var buf = [_]u8{0} ** MAX_BUF_SIZE;
         if (self.conn_stream) |conn| {
-            const prefix = try self.genMsgPfx(.bitfield, b_field.len);
-            const msg = try self.allocator.alloc(u8, b_field.len);
+            const prefix = try self.genMsgPfx(.bitfield, b_field.field.len);
+            const msg = try self.allocator.alloc(u8, b_field.field.len);
             std.mem.copyForwards(u8, msg, prefix);
-            std.mem.copyForwards(u8, msg[5..], b_field);
+            std.mem.copyForwards(u8, msg[5..], b_field.field);
             const bytes_w = conn.write(msg) catch 0;
             if (bytes_w > 0) {
-                print("Sent BitField\n", .{});
+                //print("Sent BitField\n", .{});
             }
             const bytes_r = conn.read(&buf) catch 0;
             if (bytes_r > 0) {
                 return messageParse(buf[0..bytes_r]);
             }
-            print("No Response\n", .{});
+            //print("No Response\n", .{});
         }
         return error.NoConnection;
     }
 
-    fn sendRequest(self: *@This(), idx: u32, begin: u32, length: u32) !PeerMessage {
+    pub fn sendRequest(self: *@This(), idx: u32, begin: u32, length: u32) !PeerMessage {
         var buf = [_]u8{0} ** MAX_BUF_SIZE;
         if (self.conn_stream) |conn| {
             const prefix = try self.genMsgPfx(.request, 0);
@@ -304,18 +325,18 @@ pub const Peer = struct {
             std.mem.copyForwards(u8, msg[13..], @bitCast(length));
             const bytes_w = conn.write(msg) catch 0;
             if (bytes_w > 0) {
-                print("Sent Request\n", .{});
+                //print("Sent Request\n", .{});
             }
             const bytes_r = conn.read(&buf) catch 0;
             if (bytes_r > 0) {
                 return messageParse(buf[0..bytes_r]);
             }
-            print("No response\n", .{});
+            //print("No response\n", .{});
         }
         return error.NoConnection;
     }
 
-    fn sendPiece(self: *@This(), idx: u32, begin: u32, block: []u8) !PeerMessage {
+    pub fn sendPiece(self: *@This(), idx: u32, begin: u32, block: []u8) !PeerMessage {
         var buf = [_]u8{0} ** MAX_BUF_SIZE;
         if (self.conn_stream) |conn| {
             const prefix = try self.genMsgPfx(.not_interested, block.len);
@@ -326,18 +347,18 @@ pub const Peer = struct {
             std.mem.copyForwards(u8, msg[13..], block);
             const bytes_w = conn.write(msg) catch 0;
             if (bytes_w > 0) {
-                print("Sent Piece\n", .{});
+                //print("Sent Piece\n", .{});
             }
             const bytes_r = conn.read(&buf) catch 0;
             if (bytes_r > 0) {
                 return messageParse(buf[0..bytes_r]);
             }
-            print("No response\n", .{});
+            //print("No response\n", .{});
         }
         return error.NoConnection;
     }
 
-    fn sendCancel(self: *@This(), idx: u32, begin: u32, length: u32) !PeerMessage {
+    pub fn sendCancel(self: *@This(), idx: u32, begin: u32, length: u32) !PeerMessage {
         var buf = [_]u8{0} ** MAX_BUF_SIZE;
         if (self.conn_stream) |conn| {
             const prefix = try self.genMsgPfx(.not_interested, 0);
@@ -348,18 +369,18 @@ pub const Peer = struct {
             std.mem.copyForwards(u8, msg[13..], @bitCast(length));
             const bytes_w = conn.write(msg) catch 0;
             if (bytes_w > 0) {
-                print("Sent Cancel\n", .{});
+                //print("Sent Cancel\n", .{});
             }
             const bytes_r = conn.read(&buf) catch 0;
             if (bytes_r > 0) {
                 return messageParse(buf[0..bytes_r]);
             }
-            print("No response\n", .{});
+            //print("No response\n", .{});
         }
         return error.NoConnection;
     }
 
-    fn sendPort(self: *@This(), port: u32) !PeerMessage {
+    pub fn sendPort(self: *@This(), port: u32) !PeerMessage {
         var buf = [_]u8{0} ** MAX_BUF_SIZE;
         if (self.conn_stream) |conn| {
             const prefix = try self.genMsgPfx(.bitfield, 0);
@@ -368,13 +389,13 @@ pub const Peer = struct {
             std.mem.copyForwards(u8, msg[5..], @bitCast(port));
             const bytes_w = conn.write(msg) catch 0;
             if (bytes_w > 0) {
-                print("Sent Port\n", .{});
+                //print("Sent Port\n", .{});
             }
             const bytes_r = conn.read(&buf) catch 0;
             if (bytes_r > 0) {
                 return messageParse(buf[0..bytes_r]);
             }
-            print("No Response\n", .{});
+            //print("No Response\n", .{});
         }
         return error.NoConnection;
     }
@@ -385,29 +406,22 @@ pub const Peer = struct {
 // errors must be caught here
 const FileBuffer = @import("./File.zig").FileBuffer;
 const FileBitField = @import("./File.zig").FileBitField;
-pub fn manageConn(peer: *Peer, peer_id: [HASH_LEN]u8, info_hash: [HASH_LEN]u8, file_buf: *FileBuffer, f_bfield: *FileBitField) void {
-    _ = file_buf;
-    _ = f_bfield;
+pub fn initConn(peer: *Peer, peer_id: [HASH_LEN]u8, info_hash: [HASH_LEN]u8) void {
     print("Starting Handshake: {}.{}.{}.{}\n", .{ peer.ip[0], peer.ip[1], peer.ip[2], peer.ip[3] });
     peer.connect(peer_id, info_hash) catch |err| {
         print("{}\n", .{err});
     };
     print("Completed Handshake: {}.{}.{}.{}\n", .{ peer.ip[0], peer.ip[1], peer.ip[2], peer.ip[3] });
-    while (peer.conn_stream) |conn| {
+    if (peer.conn_stream) |conn| {
         var buf = [_]u8{0} ** MAX_BUF_SIZE; // 32KB
         const bytes_r = conn.read(&buf) catch 0;
         if (bytes_r > 0) {
-            const p_msg = messageParse(&buf);
-            print("Message Received: {any}\n", .{p_msg});
-            if (peer.sendUnchoke()) |response| {
-                print("{any}\n", .{response});
-            } else |err| {
-                print("uc_error: {}\n", .{err});
-            }
-            if (peer.sendInterested()) |response| {
-                print("{any}\n", .{response});
-            } else |err| {
-                print("int_error: {}\n", .{err});
+            const bitfield_msg = messageParse(&buf);
+            if (bitfield_msg.type == .bitfield) {
+                if (bitfield_msg.b_field) |b_field| {
+                    print("Received Bitfield\n", .{});
+                    peer.state.b_field = b_field;
+                }
             }
         }
     }
@@ -417,7 +431,7 @@ fn messageParse(m_buf: []u8) PeerMessage {
     var message = PeerMessage{
         .type = .keep_alive,
         .piece_idx = undefined,
-        .bitfield = undefined,
+        .b_field = undefined,
         .index = undefined,
         .begin = undefined,
         .block = undefined,
@@ -447,7 +461,9 @@ fn messageParse(m_buf: []u8) PeerMessage {
         5 => {
             const length = readInt(u32, m_buf[0..4], .big);
             message.type = .bitfield;
-            message.bitfield = m_buf[5..length];
+            message.b_field = BitField{
+                .field = m_buf[5..length],
+            };
         },
         6 => {
             message.type = .request;
