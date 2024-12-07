@@ -32,8 +32,8 @@ pub const FileManager = struct {
     peer_id: [HASH_LEN]u8,
     t_file: Torrent.TorrentFile,
     f_file: std.fs.File.Stat,
-    f_buf: FileBuffer,
-    f_bfield: FileBitField,
+    f_buf: []u8,
+    b_field: BitField,
     t_mtx: std.Thread.Mutex,
     peers: std.ArrayList(Peer),
     p_threads: std.ArrayList(std.Thread),
@@ -52,15 +52,9 @@ pub const FileManager = struct {
             .peer_id = peer_id,
             .t_file = t_obj,
             .f_file = f_stat,
-            .f_buf = FileBuffer{
-                .mtx = std.Thread.Mutex{},
-                .buf = try allocator.alloc(u8, t_obj.length),
-            },
-            .f_bfield = FileBitField{
-                .mtx = std.Thread.Mutex{},
-                .b_field = BitField{
-                    .field = try allocator.alloc(u8, t_obj.length),
-                },
+            .f_buf = try allocator.alloc(u8, t_obj.length),
+            .b_field = BitField{
+                .field = try allocator.alloc(u8, t_obj.length),
             },
             .t_mtx = std.Thread.Mutex{},
             .peers = std.ArrayList(Peer).init(allocator),
